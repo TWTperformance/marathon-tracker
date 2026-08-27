@@ -22,7 +22,7 @@ function saveStore() {
 function loadSettings() {
   const raw = localStorage.getItem(SETTINGS_KEY);
   if (raw) { try { return JSON.parse(raw); } catch (e) {} }
-  return { googleClientId: '', spreadsheetId: '', lastPush: null, lastPull: null };
+  return { appsScriptUrl: '', syncToken: '', lastPush: null, lastPull: null };
 }
 
 function saveSettings() {
@@ -677,7 +677,7 @@ function openRecoveryForm(date) {
  * ---------------------------------------------------------------------- */
 
 function renderSettings() {
-  const gStatus = (typeof googleStatus === 'function') ? googleStatus() : { connected: false };
+  const configured = !!(settings.appsScriptUrl && settings.syncToken);
   return `
     <div class="tabhead">Settings <button class="icon-btn" id="backBtn">‹ Back</button></div>
 
@@ -692,13 +692,13 @@ function renderSettings() {
 
     <div class="card">
       <div class="card-title">Google Sheets Sync</div>
-      <div class="card-sub">${gStatus.connected ? 'Connected. Push writes local data into your sheet; Pull loads your sheet into this app.' : 'Not configured yet. Requires a Google Cloud OAuth Client ID and your spreadsheet\'s ID (from its URL).'}</div>
-      <label>Google OAuth Client ID <input type="text" id="f_clientId" value="${settings.googleClientId || ''}" placeholder="xxxx.apps.googleusercontent.com"></label>
-      <label>Spreadsheet ID <input type="text" id="f_sheetId" value="${settings.spreadsheetId || ''}" placeholder="from the sheet's URL"></label>
+      <div class="card-sub">${configured ? 'Push writes local data into your sheet; Pull loads your sheet into this app.' : 'Not configured yet. Requires deploying the Code.gs Apps Script as a Web App in your sheet (see README) — copy the resulting URL and your chosen token below.'}</div>
+      <label>Apps Script Web App URL <input type="text" id="f_scriptUrl" value="${settings.appsScriptUrl || ''}" placeholder="https://script.google.com/macros/s/.../exec"></label>
+      <label>Sync Token <input type="text" id="f_syncToken" value="${settings.syncToken || ''}" placeholder="must match SYNC_TOKEN in Code.gs"></label>
       <button class="btn btn-secondary" id="saveSyncConfigBtn">Save Config</button>
       <div class="sync-actions">
-        <button class="btn btn-primary" id="connectBtn">Connect</button>
-        <button class="btn btn-secondary" id="pushBtn">Push to Sheet</button>
+        <button class="btn btn-secondary" id="testBtn">Test Connection</button>
+        <button class="btn btn-primary" id="pushBtn">Push to Sheet</button>
         <button class="btn btn-secondary" id="pullBtn">Pull from Sheet</button>
       </div>
       <div class="card-note" id="syncStatus">${settings.lastPush ? 'Last push: ' + new Date(settings.lastPush).toLocaleString() : ''} ${settings.lastPull ? '· Last pull: ' + new Date(settings.lastPull).toLocaleString() : ''}</div>
@@ -750,25 +750,30 @@ function wireSettings() {
   });
 
   document.getElementById('saveSyncConfigBtn').addEventListener('click', () => {
-    settings.googleClientId = document.getElementById('f_clientId').value.trim();
-    settings.spreadsheetId = document.getElementById('f_sheetId').value.trim();
+    settings.appsScriptUrl = document.getElementById('f_scriptUrl').value.trim();
+    settings.syncToken = document.getElementById('f_syncToken').value.trim();
     saveSettings();
     render();
   });
 
-  document.getElementById('connectBtn').addEventListener('click', async () => {
-    if (typeof googleConnect !== 'function') { alert('Sync module not loaded.'); return; }
-    try { await googleConnect(settings.googleClientId); render(); }
-    catch (err) { alert('Connect failed: ' + err.message); }
+  document.getElementById('testBtn').addEventListener('click', async () => {
+    if (typeof googlePing !== 'function') { alert('Sync module not loaded.'); return; }
+    const status = document.getElementById('syncStatus');
+    status.textContent = 'Testing…';
+    try {
+      const ok = await googlePing(settings.appsScriptUrl, settings.syncToken);
+      status.textContent = ok ? 'Connection OK.' : 'Reached endpoint but got an unexpected response.';
+    } catch (err) { status.textContent = 'Test failed: ' + err.message; }
   });
 
   document.getElementById('pushBtn').addEventListener('click', async () => {
     if (typeof googlePush !== 'function') { alert('Sync module not loaded.'); return; }
     try {
       document.getElementById('syncStatus').textContent = 'Pushing…';
-      await googlePush(settings.spreadsheetId, store);
+      const result = await googlePush(settings.appsScriptUrl, settings.syncToken, store);
       settings.lastPush = new Date().toISOString();
       saveSettings(); render();
+      alert(`Pushed. Rows updated: ${result.updatedRows}`);
     } catch (err) { alert('Push failed: ' + err.message); }
   });
 
@@ -777,7 +782,7 @@ function wireSettings() {
     if (!confirm('Pull will overwrite local data with what is in the Google Sheet. Continue?')) return;
     try {
       document.getElementById('syncStatus').textContent = 'Pulling…';
-      const pulled = await googlePull(settings.spreadsheetId);
+      const pulled = await googlePull(settings.appsScriptUrl, settings.syncToken);
       store = pulled;
       saveStore();
       settings.lastPull = new Date().toISOString();
