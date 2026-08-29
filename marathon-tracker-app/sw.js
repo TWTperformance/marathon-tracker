@@ -1,4 +1,4 @@
-const CACHE_NAME = 'marathon-tracker-v1';
+const CACHE_NAME = 'marathon-tracker-v2';
 const APP_SHELL = [
   './',
   './index.html',
@@ -33,8 +33,13 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
 
+  // cache: 'no-store' bypasses the browser's own HTTP cache, not just the
+  // service worker's — without this, a stale copy can keep being served
+  // from disk cache even though this handler always tries the network first.
+  const freshRequest = new Request(event.request, { cache: 'no-store' });
+
   event.respondWith(
-    fetch(event.request)
+    fetch(freshRequest)
       .then((res) => {
         const copy = res.clone();
         caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));

@@ -768,9 +768,10 @@ function wireSettings() {
 
   document.getElementById('pushBtn').addEventListener('click', async () => {
     if (typeof googlePush !== 'function') { alert('Sync module not loaded.'); return; }
+    const status = document.getElementById('syncStatus');
     try {
-      document.getElementById('syncStatus').textContent = 'Pushing…';
-      const result = await googlePush(settings.appsScriptUrl, settings.syncToken, store);
+      const result = await googlePush(settings.appsScriptUrl, settings.syncToken, store,
+        (batchNum, totalBatches) => { status.textContent = `Pushing… batch ${batchNum}/${totalBatches}`; });
       settings.lastPush = new Date().toISOString();
       saveSettings(); render();
       alert(`Pushed. Rows updated: ${result.updatedRows}`);

@@ -35,9 +35,45 @@ async function googlePing(url, token) {
     return res.pong === true;
 }
 
-async function googlePush(url, token, store) {
-    const res = await callAppsScript(url, token, 'push', store);
-    return res.result; // { updatedRows }
+// Sends data in small batches instead of one large request. Some mobile
+// Chrome builds fail ("Failed to fetch") on a large POST body to Apps
+// Script's /exec URL (which internally redirects to a different Google
+// domain to serve the response) even though the same request works fine
+// on desktop Chrome with a small body. Batching sidesteps that regardless
+// of the exact cause, and means earlier batches are saved even if a later
+// one fails.
+const PUSH_BATCH_SIZE = 12;
+
+async function googlePush(url, token, store, onProgress) {
+  const items = [];
+  for (const e of Object.values(store.hooperIndex || {})) items.push({ type: 'hooperIndex', entry: e });
+  for (const e of Object.values(store.whoopRecovery || {})) items.push({ type: 'whoopRecovery', entry: e });
+  for (const e of Object.values(store.trainingLog || {})) {
+    if (e.actualDist != null) items.push({ type: 'trainingLog', entry: e }); // skip un-logged template rows — Code.gs skips these anyway
+  }
+
+  const totalBatches = Math.max(1, Math.ceil(items.length / PUSH_BATCH_SIZE));
+  let updatedRows = 0;
+
+  for (let i = 0, batchNum = 1; i < items.length; i += PUSH_BATCH_SIZE, batchNum++) {
+    const chunk = items.slice(i, i + PUSH_BATCH_SIZE);
+    const partial = { hooperIndex: {}, whoopRecovery: {}, trainingLog: {} };
+    for (const { type, entry } of chunk) partial[type][entry.date] = entry;
+
+    if (onProgress) onProgress(batchNum, totalBatches);
+
+    // One retry on a transient failure before giving up on this batch.
+    let res;
+    try {
+      res = await callAppsScript(url, token, 'push', partial);
+    } catch (err) {
+      res = await callAppsScript(url, token, 'push', partial);
+    }
+    updatedRows += (res.result && res.result.updatedRows) || 0;
+  }
+
+  if (items.length === 0) return { updatedRows: 0 };
+  return { updatedRows };
 }
 
 async function googlePull(url, token) {
